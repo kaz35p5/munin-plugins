@@ -1,0 +1,136 @@
+#!/usr/bin/perl -w
+# -*- perl -*-
+
+=head1 NAME
+
+scd4x - Plugin to monitor SCD4x sensor via sysfs
+
+=head1 CONFIGURATION
+
+The following environment variables are available
+
+ <internal_name>.label     - Label
+
+The following shows a typical configuration:
+
+ [scd4x_*]
+ env._1_0062.label Lliving
+
+=head1 AUTHOR
+
+Unknown author
+
+=head1 MAGIC MARKERS
+
+ #%# family=auto
+ #%# capabilities=autoconf suggest
+
+=cut
+
+use strict;
+use Munin::Plugin;
+
+
+sub find_devices {
+	glob("/sys/bus/i2c/devices/*-0062/iio:device*");
+}
+
+sub get_addrs {
+	my @devices = find_devices();
+	map { m|devices/([-\d]+)/| } @devices;
+}
+
+sub get_devpath {
+	(glob("/sys/bus/i2c/devices/$_[0]/iio:device*"))[0];
+}
+
+sub read_file {
+	my ($fname) = @_;
+	open(my $F, '<', $fname) or die;
+	my $text = do { local $/; <$F> };
+	close($F);
+	chomp $text;
+	$text;
+}
+
+if ($ARGV[0] and $ARGV[0] eq "autoconf") {
+	if (find_devices()) {
+		print "yes\n";
+	}
+	else {
+		print "no\n";
+	}
+	exit 0;
+}
+
+if ($ARGV[0] and $ARGV[0] eq "suggest") {
+	print "co2\n";
+	print "temp\n";
+	print "humidityrelative\n";
+	exit 0;
+}
+
+my ($func) = $0 =~ /_(\w+)$/;
+exit 2 unless defined $func;
+
+
+if ($ARGV[0] and $ARGV[0] eq "config") {
+	if ($func eq "co2") {
+		print "graph_title CO2\n";
+		print "graph_args --lower-limit 0 --upper-limit 6000\n";
+		print "graph_vlabel ppm\n";
+		print "graph_scale no\n";
+		print "graph_category weather\n";
+	}
+	elsif ($func eq "temp") {
+		print "graph_title Temperature\n";
+		print "graph_vlabel Celsius\n";
+		print "graph_scale no\n";
+		print "graph_category weather\n";
+	}
+	elsif ($func eq "humidityrelative") {
+		print "graph_title Humidity\n";
+		print "graph_args --lower-limit 0 --upper-limit 100\n";
+		print "graph_vlabel %RH\n";
+		print "graph_scale no\n";
+		print "graph_category weather\n";
+	}
+	else {
+		exit 1;
+	}
+}
+
+foreach my $addr (get_addrs()) {
+	my $node = get_devpath($addr);
+	my $name = clean_fieldname("i2c_$addr");
+	my $label = $ENV{"${name}.label"} || read_file("$node/name");
+
+	if ($ARGV[0] and $ARGV[0] eq "config") {
+		print "${name}.label $label\n";
+		exit 0;
+	}
+
+	if ($func eq "co2") {
+		my $raw = read_file("$node/in_concentration_co2_raw");
+		my $scale = read_file("$node/in_concentration_co2_scale");
+		my $co2 = $raw * 1;
+		print "${name}.value ${co2}\n";
+	}
+	elsif ($func eq "temp") {
+		my $raw = read_file("$node/in_temp_raw");
+		my $scale = read_file("$node/in_temp_scale");
+		my $offset = read_file("$node/in_temp_offset");
+		my $t = ($raw + $offset) * $scale;
+		$t /= 1000;
+		print "${name}.value ${t}\n";
+	}
+	elsif ($func eq "humidityrelative") {
+		my $raw = read_file("$node/in_humidityrelative_raw");
+		my $scale = read_file("$node/in_humidityrelative_scale");
+		my $h = $raw * $scale;
+		$h /= 1000;
+		print "${name}.value ${h}\n";
+	}
+}
+
+exit 0;
